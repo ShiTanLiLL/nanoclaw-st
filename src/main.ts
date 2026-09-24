@@ -5,18 +5,22 @@ import { createInterface } from 'node:readline/promises';
 import { replyToText } from './reply.js';
 
 /**
- * 读取一次标准输入，调用 replyToText，并在需要回复时打印结果。
+ * 在一个进程中逐行读取标准输入，调用 replyToText 并打印需要回复的结果。
  *
- * 输入来自终端，replyToText 返回 string 或 null；null 表示普通聊天，
- * 此时不向标准输出写入助手回复。入口不负责判断触发词。
+ * history 数组由本函数创建；每次调用都把同一个数组交给 replyToText，
+ * 因此下一行能读到上一行留下的正文。输入结束后，本次会话随进程结束。
  */
 export async function runCli(): Promise<void> {
-  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  const terminal = createInterface({ input: process.stdin });
+  const history: string[] = [];
+
   try {
-    const text = await terminal.question('你：');
-    const reply = replyToText(text);
-    if (reply !== null) {
-      process.stdout.write(`${reply}\n`);
+    // 每读到一行就处理一次；循环期间 history 始终是同一个数组。
+    for await (const text of terminal) {
+      const reply = replyToText(text, history);
+      if (reply !== null) {
+        process.stdout.write(`${reply}\n`);
+      }
     }
   } finally {
     terminal.close();
