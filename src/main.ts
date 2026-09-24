@@ -5,16 +5,19 @@ import { createInterface } from 'node:readline/promises';
 import { replyToText } from './reply.js';
 
 /**
- * 读取一次标准输入，调用业务函数，并把回复打印到标准输出。
+ * 读取一次标准输入，调用 replyToText，并在需要回复时打印结果。
  *
- * 入口只负责 CLI 边界，不负责决定回复内容；这样业务函数可以被测试
- * 直接调用，也为以后替换输入渠道留下清晰的当前边界。
+ * 输入来自终端，replyToText 返回 string 或 null；null 表示普通聊天，
+ * 此时不向标准输出写入助手回复。入口不负责判断触发词。
  */
 export async function runCli(): Promise<void> {
   const terminal = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const text = await terminal.question('你：');
-    process.stdout.write(`${replyToText(text)}\n`);
+    const reply = replyToText(text);
+    if (reply !== null) {
+      process.stdout.write(`${reply}\n`);
+    }
   } finally {
     terminal.close();
   }

@@ -1,9 +1,14 @@
 /**
- * 把一次用户输入变成当前版本的最小助手回复。
+ * 判断一次输入是否在呼叫助手，并在触发时生成回复。
  *
- * 第 1 课只有一种处理方式，所以直接使用函数，不提前引入 Provider
- * 或其它间接层。后续需求出现后，这个函数允许被重写或拆分。
+ * 输入是终端读到的原始文字。只有以 @Andy 开头时才返回回复字符串；
+ * 普通聊天返回 null，告诉调用者本次不需要输出。
  */
-export function replyToText(text: string): string {
-  return `NanoClaw: ${text}`;
+export function replyToText(text: string): string | null {
+  if (!text.startsWith('@Andy')) {
+    return null;
+  }
+
+  const message = text.slice('@Andy'.length).trimStart();
+  return `NanoClaw: ${message}`;
 }
