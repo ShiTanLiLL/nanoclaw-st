@@ -1,3 +1,4 @@
 node_modules/
 dist/
+/conversation.json
 .DS_Store
