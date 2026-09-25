@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 
 import { loadHistories, saveHistories } from './history.js';
+import { createMessageQueue } from './message-queue.js';
 import { replyToText } from './reply.js';
 
 /**
@@ -23,27 +24,32 @@ function parseChatLine(line: string): { chatId: string; text: string } {
 /**
  * 在一个进程中逐行读取标准输入，调用 replyToText 并打印需要回复的结果。
  *
- * 启动时恢复各聊天历史；每行只交给对应聊天的数组处理，有回复时写回。
+ * 启动时恢复各聊天历史；新行先进入内存队列，处理循环按顺序回复并写回。
  */
 export async function runCli(): Promise<void> {
   const historyFile = path.join(process.cwd(), 'conversation.json');
   const histories = await loadHistories(historyFile);
   const terminal = createInterface({ input: process.stdin });
+  const queue = createMessageQueue(async (line) => {
+    const { chatId, text } = parseChatLine(line);
+    const history = histories.get(chatId) ?? [];
+    const reply = replyToText(text, history);
+    if (reply !== null) {
+      // 首条有效消息才创建该聊天的历史；普通消息不会产生空聊天。
+      histories.set(chatId, history);
+      await saveHistories(historyFile, histories);
+      process.stdout.write(`${reply}\n`);
+    }
+  });
 
   try {
     for await (const line of terminal) {
-      const { chatId, text } = parseChatLine(line);
-      const history = histories.get(chatId) ?? [];
-      const reply = replyToText(text, history);
-      if (reply !== null) {
-        // 首条有效消息才创建该聊天的历史；普通消息不会产生空聊天。
-        histories.set(chatId, history);
-        await saveHistories(historyFile, histories);
-        process.stdout.write(`${reply}\n`);
-      }
+      queue.enqueue(line);
     }
   } finally {
     terminal.close();
+    // 管道输入结束时仍可能有待办消息；等它们全部处理完再退出。
+    await queue.whenIdle();
   }
 }
 
