@@ -1,3 +1,32 @@
 {
-    "js/ts.tsdk.path": "node_modules/typescript/lib"
+    "js/ts.tsdk.path": "node_modules/typescript/lib",
+    "workbench.colorCustomizations": {
+        "activityBar.activeBackground": "#e3ae48",
+        "activityBar.activeBorder": "#15202b",
+        "activityBar.background": "#e3ae48",
+        "activityBar.foreground": "#15202b",
+        "activityBar.inactiveForeground": "#15202b99",
+        "activityBarBadge.background": "#158a62",
+        "activityBarBadge.foreground": "#e7e7e7",
+        "activityBarTop.activeBackground": "#e3ae48",
+        "activityBarTop.activeBorder": "#15202b",
+        "activityBarTop.background": "#e3ae48",
+        "activityBarTop.foreground": "#15202b",
+        "activityBarTop.inactiveForeground": "#15202b99",
+        "commandCenter.border": "#15202b99",
+        "commandCenter.foreground": "#15202b",
+        "sash.hoverBorder": "#e3ae48",
+        "statusBar.background": "#d79921",
+        "statusBar.debuggingBackground": "#d79921",
+        "statusBar.debuggingForeground": "#15202b",
+        "statusBar.foreground": "#15202b",
+        "statusBarItem.hoverBackground": "#ab7a1a",
+        "statusBarItem.remoteBackground": "#c8f7e7",
+        "statusBarItem.remoteForeground": "#15202b",
+        "titleBar.activeBackground": "#d79921",
+        "titleBar.activeForeground": "#15202b",
+        "titleBar.inactiveBackground": "#d7992199",
+        "titleBar.inactiveForeground": "#15202b99"
+    },
+    "peacock.remoteColor": "#d79921"
 }

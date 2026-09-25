@@ -2,26 +2,43 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 
-import { loadHistory, saveHistory } from './history.js';
+import { loadHistories, saveHistories } from './history.js';
 import { replyToText } from './reply.js';
+
+/**
+ * 把终端一行文字拆成聊天 ID 和实际消息；无 [聊天 ID] 前缀时沿用默认聊天。
+ * 例如 "[家人] @Andy 你好" 会得到 chatId="家人"、text="@Andy 你好"。
+ */
+function parseChatLine(line: string): { chatId: string; text: string } {
+  const markerEnd = line.indexOf('] ');
+  if (line.startsWith('[') && markerEnd > 1) {
+    return {
+      chatId: line.slice(1, markerEnd),
+      text: line.slice(markerEnd + 2),
+    };
+  }
+  return { chatId: 'default', text: line };
+}
 
 /**
  * 在一个进程中逐行读取标准输入，调用 replyToText 并打印需要回复的结果。
  *
- * 启动时从当前工作目录的 JSON 文件恢复 history；每条被处理的消息之后写回。
- * 同一进程中始终把同一个数组交给 replyToText。
+ * 启动时恢复各聊天历史；每行只交给对应聊天的数组处理，有回复时写回。
  */
 export async function runCli(): Promise<void> {
   const historyFile = path.join(process.cwd(), 'conversation.json');
-  const history = await loadHistory(historyFile);
+  const histories = await loadHistories(historyFile);
   const terminal = createInterface({ input: process.stdin });
 
   try {
-    // 每读到一行就处理一次；循环期间 history 始终是同一个数组。
-    for await (const text of terminal) {
+    for await (const line of terminal) {
+      const { chatId, text } = parseChatLine(line);
+      const history = histories.get(chatId) ?? [];
       const reply = replyToText(text, history);
       if (reply !== null) {
-        await saveHistory(historyFile, history);
+        // 首条有效消息才创建该聊天的历史；普通消息不会产生空聊天。
+        histories.set(chatId, history);
+        await saveHistories(historyFile, histories);
         process.stdout.write(`${reply}\n`);
       }
     }
