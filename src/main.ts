@@ -5,7 +5,8 @@ import { readFile } from 'node:fs/promises';
 import type { DatabaseSync } from 'node:sqlite';
 
 import { createMessageQueue } from './message-queue.js';
-import { replyToText } from './reply.js';
+import { deliverReplies, enqueueInbound, processInbox } from './mailbox.js';
+import { triggeredBody } from './reply.js';
 import {
   appendUserMessage,
   lastUserMessage,
@@ -28,11 +29,6 @@ function parseChatLine(line: string): { chatId: string; text: string } {
   return { chatId: 'default', text: line };
 }
 
-/** 把业务回复送到当前本地终端；这里不决定消息从哪里来。 */
-function sendConsoleReply(reply: string): void {
-  process.stdout.write(`${reply}\n`);
-}
-
 /** 打开当前工作目录的数据库，并在首次创建时导入旧 JSON 历史。 */
 async function openCurrentDatabase(): Promise<DatabaseSync> {
   const directory = process.cwd();
@@ -43,20 +39,25 @@ async function openCurrentDatabase(): Promise<DatabaseSync> {
 }
 
 /**
- * 处理任一来源提供的逐行消息：入队、查询上一句、生成回复并保存。
+ * 处理任一来源提供的逐行消息：宿主收信入邮箱；自动模式再处理与投递。
  * lines 可以由终端陆续提供，也可以是从文本文件拆出的现成数组。
  */
 async function processMessages(
   lines: AsyncIterable<string> | Iterable<string>,
   database: DatabaseSync,
+  autoProcess: boolean,
 ): Promise<void> {
   const queue = createMessageQueue(async (line) => {
     const { chatId, text } = parseChatLine(line);
+    const body = triggeredBody(text);
+    if (body === null) return;
+
     const previousMessage = lastUserMessage(database, chatId);
-    const result = replyToText(text, previousMessage);
-    if (result !== null) {
-      appendUserMessage(database, chatId, result.body);
-      sendConsoleReply(result.reply);
+    enqueueInbound(process.cwd(), chatId, text, previousMessage);
+    appendUserMessage(database, chatId, body);
+    if (autoProcess) {
+      processInbox(process.cwd(), chatId);
+      deliverReplies(process.cwd(), chatId, database);
     }
   });
 
@@ -75,7 +76,7 @@ export async function runCli(): Promise<void> {
   const database = await openCurrentDatabase();
   const terminal = createInterface({ input: process.stdin });
   try {
-    await processMessages(terminal, database);
+    await processMessages(terminal, database, true);
   } finally {
     terminal.close();
     database.close();
@@ -87,7 +88,34 @@ export async function runReplay(filePath: string): Promise<void> {
   const contents = await readFile(filePath, 'utf8');
   const database = await openCurrentDatabase();
   try {
-    await processMessages(contents.split(/\r?\n/), database);
+    await processMessages(contents.split(/\r?\n/), database, true);
+  } finally {
+    database.close();
+  }
+}
+
+/** 仅收信：宿主把标准输入中的消息写入对应聊天的入站邮箱，不运行处理器。 */
+export async function runReceive(): Promise<void> {
+  const database = await openCurrentDatabase();
+  const terminal = createInterface({ input: process.stdin });
+  try {
+    await processMessages(terminal, database, false);
+  } finally {
+    terminal.close();
+    database.close();
+  }
+}
+
+/** 仅处理指定聊天的待办入站消息；可以由另一个 Node 进程执行。 */
+export function runProcess(chatId: string): void {
+  processInbox(process.cwd(), chatId);
+}
+
+/** 仅投递指定聊天尚未确认的出站回复。 */
+export async function runDeliver(chatId: string): Promise<void> {
+  const database = await openCurrentDatabase();
+  try {
+    deliverReplies(process.cwd(), chatId, database);
   } finally {
     database.close();
   }
@@ -113,9 +141,15 @@ if (currentFile === invokedFile) {
     await runReplay(process.argv[3]);
   } else if (process.argv.length === 4 && process.argv[2] === '--search') {
     await runSearch(process.argv[3]);
+  } else if (process.argv.length === 3 && process.argv[2] === '--receive') {
+    await runReceive();
+  } else if (process.argv.length === 4 && process.argv[2] === '--process') {
+    runProcess(process.argv[3]);
+  } else if (process.argv.length === 4 && process.argv[2] === '--deliver') {
+    await runDeliver(process.argv[3]);
   } else if (process.argv.length === 2) {
     await runCli();
   } else {
-    throw new Error('用法：node dist/src/main.js [--replay 文件路径 | --search 关键词]');
+    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID | --deliver 聊天ID]');
   }
 }

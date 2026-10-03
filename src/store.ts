@@ -25,6 +25,13 @@ export async function openConversationDatabase(
         body TEXT NOT NULL
       )
     `);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS delivered_replies (
+        chat_id TEXT NOT NULL,
+        outbound_id INTEGER NOT NULL,
+        PRIMARY KEY (chat_id, outbound_id)
+      )
+    `);
 
     if (isNewDatabase && oldHistories.size > 0) {
       // 一次性导入旧文件；任一插入失败就撤销这批插入，不留下半份历史。
@@ -70,4 +77,16 @@ export function searchMessages(database: DatabaseSync, keyword: string): StoredM
     chatId: String(row.chatId),
     body: String(row.body),
   }));
+}
+
+/** 宿主检查一封回信是否已经向终端投递过。 */
+export function wasDelivered(database: DatabaseSync, chatId: string, outboundId: number): boolean {
+  return database.prepare('SELECT 1 FROM delivered_replies WHERE chat_id = ? AND outbound_id = ?')
+    .get(chatId, outboundId) !== undefined;
+}
+
+/** 投递完成后在宿主拥有的中心库中确认，不让宿主写处理器的输出邮箱。 */
+export function markDelivered(database: DatabaseSync, chatId: string, outboundId: number): void {
+  database.prepare('INSERT INTO delivered_replies (chat_id, outbound_id) VALUES (?, ?)')
+    .run(chatId, outboundId);
 }

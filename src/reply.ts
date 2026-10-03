@@ -8,11 +8,8 @@ export function replyToText(
   text: string,
   previousMessage?: string,
 ): { body: string; reply: string } | null {
-  if (!text.startsWith('@Andy')) {
-    return null;
-  }
-
-  const message = text.slice('@Andy'.length).trimStart();
+  const message = triggeredBody(text);
+  if (message === null) return null;
 
   if (message === '我刚才说了什么？') {
     const reply = previousMessage === undefined
@@ -22,4 +19,9 @@ export function replyToText(
   }
 
   return { body: message, reply: `NanoClaw: ${message}` };
+}
+
+/** 宿主收信时只判断是否真的呼叫助手，不在这里生成或保存回复。 */
+export function triggeredBody(text: string): string | null {
+  return text.startsWith('@Andy') ? text.slice('@Andy'.length).trimStart() : null;
 }
