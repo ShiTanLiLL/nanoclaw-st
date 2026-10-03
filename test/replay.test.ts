@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * 从现成文本文件接收多行消息，仍走原来的队列、聊天记忆和终端回复链。
- * 临时目录隔离输入文件与 conversation.json，避免影响真实会话。
+ * 临时目录隔离输入文件与 conversation.db，避免影响真实会话。
  */
 test('可以重放文本文件中的消息并输出回复', () => {
   const workingDirectory = mkdtempSync(path.join(tmpdir(), 'nanoclaw-lesson7-'));
@@ -29,9 +29,14 @@ test('可以重放文本文件中的消息并输出回复', () => {
       result.stdout,
       'NanoClaw: 我叫小李\nNanoClaw: 你刚才说：我叫小李\n',
     );
-    assert.deepEqual(
-      JSON.parse(readFileSync(path.join(workingDirectory, 'conversation.json'), 'utf8')),
-      { 家人: ['我叫小李', '我刚才说了什么？'] },
+    const search = spawnSync(process.execPath, [program, '--search', '我'], {
+      cwd: workingDirectory,
+      encoding: 'utf8',
+    });
+    assert.equal(search.status, 0, search.stderr);
+    assert.equal(
+      search.stdout,
+      '1 [家人] 我叫小李\n2 [家人] 我刚才说了什么？\n',
     );
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });

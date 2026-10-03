@@ -1,8 +1,8 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 /**
- * 从 JSON 读取各聊天的历史。旧版单数组文件归入 default 聊天。
- * 第一次启动文件还不存在时返回空 Map；其他错误仍交给调用者处理。
+ * 仅在首次创建 SQLite 数据库时读取前几课留下的 JSON 文件。
+ * 旧版单数组文件归入 default；文件不存在时返回空 Map。
  */
 export async function loadHistories(filePath: string): Promise<Map<string, string[]>> {
   try {
@@ -18,12 +18,4 @@ export async function loadHistories(filePath: string): Promise<Map<string, strin
     }
     throw error;
   }
-}
-
-/** 把聊天 ID 与各自的历史写成 JSON 对象，供下次启动恢复。 */
-export async function saveHistories(
-  filePath: string,
-  histories: Map<string, string[]>,
-): Promise<void> {
-  await writeFile(filePath, `${JSON.stringify(Object.fromEntries(histories), null, 2)}\n`, 'utf8');
 }
