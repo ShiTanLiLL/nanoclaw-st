@@ -1,20 +1,33 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { replyToText } from './reply.js';
+import { processMailbox } from './processor.js';
 import { markDelivered, wasDelivered } from './store.js';
 
 /** 聊天 ID 可能含斜杠；把它哈希成固定的安全目录名，而非直接拼入路径。 */
-function mailboxPaths(baseDirectory: string, chatId: string) {
+export function mailboxPaths(baseDirectory: string, chatId: string) {
   const safeName = createHash('sha256').update(chatId).digest('hex');
   const directory = path.join(baseDirectory, 'mailboxes', safeName);
+  const outputDirectory = path.join(directory, 'output');
   return {
     directory,
+    outputDirectory,
     inbound: path.join(directory, 'inbound.db'),
-    outbound: path.join(directory, 'outbound.db'),
+    outbound: path.join(outputDirectory, 'outbound.db'),
   };
+}
+
+/** 只迁移第 9 课已经关闭的输出邮箱文件；不改数据库行，保留投递确认所用的 ID。 */
+export function prepareMailbox(baseDirectory: string, chatId: string) {
+  const paths = mailboxPaths(baseDirectory, chatId);
+  mkdirSync(paths.outputDirectory, { recursive: true });
+  const legacyOutbound = path.join(paths.directory, 'outbound.db');
+  if (existsSync(legacyOutbound) && !existsSync(paths.outbound)) {
+    renameSync(legacyOutbound, paths.outbound);
+  }
+  return paths;
 }
 
 /** 宿主只写入站邮箱：原始文本与接收当时的上一句一起交给处理器。 */
@@ -24,8 +37,7 @@ export function enqueueInbound(
   text: string,
   previousMessage?: string,
 ): void {
-  const paths = mailboxPaths(baseDirectory, chatId);
-  mkdirSync(paths.directory, { recursive: true });
+  const paths = prepareMailbox(baseDirectory, chatId);
   const inbound = new DatabaseSync(paths.inbound);
   try {
     inbound.exec(`CREATE TABLE IF NOT EXISTS messages (
@@ -44,35 +56,14 @@ export function enqueueInbound(
 export function processInbox(baseDirectory: string, chatId: string): void {
   const paths = mailboxPaths(baseDirectory, chatId);
   if (!existsSync(paths.inbound)) return;
-
-  const inbound = new DatabaseSync(paths.inbound, { readOnly: true });
-  const outbound = new DatabaseSync(paths.outbound);
-  try {
-    outbound.exec(`CREATE TABLE IF NOT EXISTS replies (
-      id INTEGER PRIMARY KEY,
-      inbound_id INTEGER NOT NULL UNIQUE,
-      reply TEXT NOT NULL
-    )`);
-    const messages = inbound.prepare('SELECT id, text, previous_body FROM messages ORDER BY id').all();
-    const findReply = outbound.prepare('SELECT 1 FROM replies WHERE inbound_id = ?');
-    const saveReply = outbound.prepare('INSERT INTO replies (inbound_id, reply) VALUES (?, ?)');
-    for (const message of messages) {
-      if (findReply.get(message.id) !== undefined) continue;
-      const result = replyToText(
-        String(message.text),
-        message.previous_body === null ? undefined : String(message.previous_body),
-      );
-      if (result !== null) saveReply.run(message.id, result.reply);
-    }
-  } finally {
-    inbound.close();
-    outbound.close();
-  }
+  prepareMailbox(baseDirectory, chatId);
+  processMailbox(paths.inbound, paths.outbound);
 }
 
 /** 宿主只读出站，把未确认的回信输出后，在自己的中心库记录投递确认。 */
 export function deliverReplies(baseDirectory: string, chatId: string, database: DatabaseSync): void {
   const paths = mailboxPaths(baseDirectory, chatId);
+  if (existsSync(path.join(paths.directory, 'outbound.db'))) prepareMailbox(baseDirectory, chatId);
   if (!existsSync(paths.outbound)) return;
 
   const outbound = new DatabaseSync(paths.outbound, { readOnly: true });

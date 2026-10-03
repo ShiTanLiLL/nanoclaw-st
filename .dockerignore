@@ -1,0 +1,9 @@
+**
+!package.json
+!container/
+!container/Dockerfile
+!dist/
+!dist/src/
+!dist/src/agent-runner.js
+!dist/src/processor.js
+!dist/src/reply.js

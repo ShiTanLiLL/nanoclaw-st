@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import type { DatabaseSync } from 'node:sqlite';
 
 import { createMessageQueue } from './message-queue.js';
+import { runContainer } from './container-runner.js';
 import { deliverReplies, enqueueInbound, processInbox } from './mailbox.js';
 import { triggeredBody } from './reply.js';
 import {
@@ -111,6 +112,11 @@ export function runProcess(chatId: string): void {
   processInbox(process.cwd(), chatId);
 }
 
+/** 宿主启动隔离处理器并等它处理完当前消息；回复仍由 --deliver 投递。 */
+export async function runContainerProcess(chatId: string): Promise<void> {
+  await runContainer(process.cwd(), chatId);
+}
+
 /** 仅投递指定聊天尚未确认的出站回复。 */
 export async function runDeliver(chatId: string): Promise<void> {
   const database = await openCurrentDatabase();
@@ -145,11 +151,13 @@ if (currentFile === invokedFile) {
     await runReceive();
   } else if (process.argv.length === 4 && process.argv[2] === '--process') {
     runProcess(process.argv[3]);
+  } else if (process.argv.length === 4 && process.argv[2] === '--process-container') {
+    await runContainerProcess(process.argv[3]);
   } else if (process.argv.length === 4 && process.argv[2] === '--deliver') {
     await runDeliver(process.argv[3]);
   } else if (process.argv.length === 2) {
     await runCli();
   } else {
-    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID | --deliver 聊天ID]');
+    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID | --process-container 聊天ID | --deliver 聊天ID]');
   }
 }

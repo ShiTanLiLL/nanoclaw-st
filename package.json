@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc",
     "start": "pnpm build && node dist/src/main.js",
-    "test": "pnpm build && node --test dist/test/*.test.js"
+    "test": "pnpm build && node --test dist/test/*.test.js",
+    "container:build": "pnpm build && docker build -t nanoclaw-st-agent:lesson10 -f container/Dockerfile .",
+    "test:container": "pnpm build && node --test dist/test/integration/*.test.js"
   },
   "engines": {
     "node": ">=22.13.0"
