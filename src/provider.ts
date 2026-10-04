@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { replyToBody } from './reply.js';
 
-/** 当前两种回复方式共用的函数约定：正文与上一句进来，完整回复异步返回。 */
-export type ReplyProvider = (body: string, previousMessage?: string) => Promise<string>;
+/** 回复函数约定：正文、会话上一句和可选角色进来，完整回复异步返回。 */
+export type ReplyProvider = (body: string, previousMessage?: string, systemPrompt?: string) => Promise<string>;
 
 /** 宿主/处理器都可读配置；只在选择真实模型时要求凭据，不输出密钥。 */
 export function providerSettings(environment: NodeJS.ProcessEnv = process.env):
@@ -25,8 +25,8 @@ export async function localProvider(body: string, previousMessage?: string): Pro
 
 /** 创建真实 SDK 回复函数；client 与 model 被内部函数记住，处理器不用了解 HTTP。 */
 export function createAnthropicProvider(client: Anthropic, model: string): ReplyProvider {
-  /** 把已有的一句上下文交给模型，将响应中的文本块合并成待投递的字符串。 */
-  return async function callAnthropic(body, previousMessage) {
+  /** 把当前会话的角色与一句上下文交给模型，合并文本块为待投递的字符串。 */
+  return async function callAnthropic(body, previousMessage, systemPrompt) {
     const content = previousMessage === undefined
       ? body
       : `上一条用户消息：${previousMessage}\n当前用户消息：${body}`;
@@ -35,7 +35,7 @@ export function createAnthropicProvider(client: Anthropic, model: string): Reply
       max_tokens: 1024,
       // 当前只需要直接文本回答；兼容服务的默认思考模式可能耗尽短输出预算。
       thinking: { type: 'disabled' },
-      system: '你是个人助手 NanoClaw。用中文简洁回答当前用户消息；上一条用户消息仅作为上下文。',
+      system: systemPrompt ?? '你是个人助手 NanoClaw。用中文简洁回答当前用户消息；上一条用户消息仅作为上下文。',
       messages: [{ role: 'user', content }],
     });
     const parts: string[] = [];

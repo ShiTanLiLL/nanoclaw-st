@@ -7,10 +7,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { createMessageQueue } from './message-queue.js';
 import { runContainer } from './container-runner.js';
 import { deliverReplies, enqueueInbound, processInbox } from './mailbox.js';
-import { triggeredBody } from './reply.js';
+import {
+  appendSessionMessage, getSession, lastSessionMessage, routeMessage, wireAgent,
+} from './router.js';
 import {
   appendUserMessage,
-  lastUserMessage,
   openConversationDatabase,
   searchMessages,
 } from './store.js';
@@ -40,7 +41,7 @@ async function openCurrentDatabase(): Promise<DatabaseSync> {
 }
 
 /**
- * 处理任一来源提供的逐行消息：宿主收信入邮箱；自动模式再处理与投递。
+ * 宿主处理逐行消息：路由后给各会话留信；自动模式再顺序处理与投递。
  * lines 可以由终端陆续提供，也可以是从文本文件拆出的现成数组。
  */
 async function processMessages(
@@ -50,15 +51,25 @@ async function processMessages(
 ): Promise<void> {
   const queue = createMessageQueue(async (line) => {
     const { chatId, text } = parseChatLine(line);
-    const body = triggeredBody(text);
-    if (body === null) return;
+    const routes = routeMessage(database, chatId, text);
+    if (routes.length === 0) return;
 
-    const previousMessage = lastUserMessage(database, chatId);
-    enqueueInbound(process.cwd(), chatId, text, previousMessage);
-    appendUserMessage(database, chatId, body);
+    // 先给所有目标留信；同一聊天的不同助手读取各自的上一句。
+    const sessions = routes.map((route) => {
+      const session = getSession(database, chatId, route.agentId);
+      const previousMessage = lastSessionMessage(database, session.id);
+      enqueueInbound(process.cwd(), session.mailboxKey, text, previousMessage, route);
+      appendSessionMessage(database, session.id, route.body);
+      return session;
+    });
+    // 搜索仍按聊天记录，一条输入不会因为命中两位助手而重复保存。
+    appendUserMessage(database, chatId, routes[0].body);
     if (autoProcess) {
-      await processInbox(process.cwd(), chatId);
-      deliverReplies(process.cwd(), chatId, database);
+      for (const session of sessions) {
+        await processInbox(process.cwd(), session.mailboxKey);
+        const prefix = session.agentId === 'Andy' ? '' : `[${session.agentId}] `;
+        deliverReplies(process.cwd(), session.mailboxKey, database, prefix);
+      }
     }
   });
 
@@ -107,21 +118,47 @@ export async function runReceive(): Promise<void> {
   }
 }
 
-/** 仅处理指定聊天的待办入站消息；可以由另一个 Node 进程执行。 */
-export async function runProcess(chatId: string): Promise<void> {
-  await processInbox(process.cwd(), chatId);
+/** 宿主找到指定聊天×助手的邮箱，再由本地处理器处理；默认仍是Andy。 */
+export async function runProcess(chatId: string, agentId = 'Andy'): Promise<void> {
+  const database = await openCurrentDatabase();
+  try {
+    const session = getSession(database, chatId, agentId);
+    await processInbox(process.cwd(), session.mailboxKey);
+  } finally {
+    database.close();
+  }
 }
 
 /** 宿主启动隔离处理器并等它处理完当前消息；回复仍由 --deliver 投递。 */
-export async function runContainerProcess(chatId: string): Promise<void> {
-  await runContainer(process.cwd(), chatId);
-}
-
-/** 仅投递指定聊天尚未确认的出站回复。 */
-export async function runDeliver(chatId: string): Promise<void> {
+export async function runContainerProcess(chatId: string, agentId = 'Andy'): Promise<void> {
   const database = await openCurrentDatabase();
   try {
-    deliverReplies(process.cwd(), chatId, database);
+    const session = getSession(database, chatId, agentId);
+    await runContainer(process.cwd(), session.mailboxKey);
+  } finally {
+    database.close();
+  }
+}
+
+/** 宿主仅投递指定聊天×助手尚未确认的回复，专用助手加名字标识。 */
+export async function runDeliver(chatId: string, agentId = 'Andy'): Promise<void> {
+  const database = await openCurrentDatabase();
+  try {
+    const session = getSession(database, chatId, agentId);
+    const prefix = agentId === 'Andy' ? '' : `[${agentId}] `;
+    deliverReplies(process.cwd(), session.mailboxKey, database, prefix);
+  } finally {
+    database.close();
+  }
+}
+
+/** 宿主配置聊天到助手的接线与角色；只保存关系，不调用模型。 */
+export async function runWire(
+  chatId: string, agentId: string, kind: string, trigger: string, systemPrompt: string,
+): Promise<void> {
+  const database = await openCurrentDatabase();
+  try {
+    wireAgent(database, chatId, agentId, kind, trigger, systemPrompt);
   } finally {
     database.close();
   }
@@ -149,15 +186,17 @@ if (currentFile === invokedFile) {
     await runSearch(process.argv[3]);
   } else if (process.argv.length === 3 && process.argv[2] === '--receive') {
     await runReceive();
-  } else if (process.argv.length === 4 && process.argv[2] === '--process') {
-    await runProcess(process.argv[3]);
-  } else if (process.argv.length === 4 && process.argv[2] === '--process-container') {
-    await runContainerProcess(process.argv[3]);
-  } else if (process.argv.length === 4 && process.argv[2] === '--deliver') {
-    await runDeliver(process.argv[3]);
+  } else if ([4, 5].includes(process.argv.length) && process.argv[2] === '--process') {
+    await runProcess(process.argv[3], process.argv[4]);
+  } else if ([4, 5].includes(process.argv.length) && process.argv[2] === '--process-container') {
+    await runContainerProcess(process.argv[3], process.argv[4]);
+  } else if ([4, 5].includes(process.argv.length) && process.argv[2] === '--deliver') {
+    await runDeliver(process.argv[3], process.argv[4]);
+  } else if (process.argv.length === 8 && process.argv[2] === '--wire') {
+    await runWire(process.argv[3], process.argv[4], process.argv[5], process.argv[6], process.argv[7]);
   } else if (process.argv.length === 2) {
     await runCli();
   } else {
-    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID | --process-container 聊天ID | --deliver 聊天ID]');
+    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID [助手] | --process-container 聊天ID [助手] | --deliver 聊天ID [助手] | --wire 聊天ID 助手 mention|pattern 触发规则 提示词]');
   }
 }

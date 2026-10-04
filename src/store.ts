@@ -2,11 +2,12 @@ import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { loadHistories } from './history.js';
+import { initializeRouting } from './router.js';
 
 export type StoredMessage = { id: number; chatId: string; body: string };
 
 /**
- * 打开本地 SQLite 数据库，建立当前唯一需要的消息表。
+ * 宿主打开中心库，建立搜索/投递表和路由/会话表。
  * 只有数据库第一次创建时，才把旧 JSON 历史按聊天和顺序导入。
  */
 export async function openConversationDatabase(
@@ -47,6 +48,7 @@ export async function openConversationDatabase(
         throw error;
       }
     }
+    initializeRouting(database);
     return database;
   } catch (error) {
     database.close();

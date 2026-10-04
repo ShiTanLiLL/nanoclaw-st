@@ -45,7 +45,7 @@ pnpm container:build
 pnpm test:container
 ```
 
-普通 `pnpm test` 为 16 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
+普通 `pnpm test` 为 18 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
 真实 Docker 测试。两组业务数据都隔离在临时目录。
 要处理自己已收进邮箱的消息，用 `--process-container 家人` 替换上面的
 `--process 家人`，再 `--deliver 家人`。处理器代码变更后需重新构建镜像。
@@ -95,6 +95,29 @@ node --env-file=.env dist/src/main.js --process-container 模型演示
 node dist/src/main.js --deliver 模型演示
 ```
 
-第 11 课镜像为 `nanoclaw-st-agent:lesson11`。调用真实 API 会发送当前正文和
+当前第 12 课镜像为 `nanoclaw-st-agent:lesson12`。调用真实 API 会发送当前正文和
 至多上一句用户正文，可能产生API费用；本地自动测试不请求云端。
 SDK请求由本地模拟HTTP服务验证，云端权限与实际回答需要你用自己的配置验收。
+
+## 第 12 课：同一聊天里的多个助手
+
+本次从第11课提交恢复后，只重新生成第12课。配置角色与触发规则不调用模型：
+
+```bash
+pnpm build
+node dist/src/main.js --wire 课堂 Andy mention '@Andy' '你是通用助手，用中文简洁回答。'
+node dist/src/main.js --wire 课堂 Teacher pattern '^@(Teacher|Andy)' '你是耐心的TypeScript老师，用中文举例讲解。'
+pnpm start:model
+```
+
+`[课堂] @Teacher 解释闭包`只交给老师；`[课堂] @Andy 解释闭包`交给两位。
+Teacher回复带`[Teacher]`标识，各自只记住路由给自己的上一句用户消息。
+配置过的聊天只按显式绑定匹配；未配置聊天继续使用旧`@Andy`入口。
+搜索按聊天只记录一次，模型上下文改从聊天×助手会话读取。
+
+分段命令可增加助手名：`--process 课堂 Teacher`、
+`--process-container 课堂 Teacher`、`--deliver 课堂 Teacher`。
+省略助手仍只处理Andy，不表示处理所有助手。容器使用lesson12镜像，
+只读取当前会话入站正文、上一句与角色快照；中心库仍由宿主掌管。
+完整阅读、数据说明和真实模型验收见
+[第12课教案](tutorial/教案/第12课-一个聊天连接多个助手.md)。

@@ -50,6 +50,26 @@ test('真实容器只读输入、写回输出，宿主可投递且重复处理�
     assert.equal(execFileSync(process.execPath, [program, '--deliver', '工作'], {
       cwd: directory, encoding: 'utf8',
     }), '');
+
+    // 同一聊天的老师使用独立邮箱；新路由正文也能由真实容器处理。
+    execFileSync(process.execPath, [program, '--wire', '家人', 'Teacher', 'mention', '@Teacher', '老师角色'], {
+      cwd: directory,
+    });
+    execFileSync(process.execPath, [program, '--receive'], {
+      cwd: directory, input: '[家人] @Teacher 老师独立消息\n',
+    });
+    execFileSync(process.execPath, [program, '--process-container', '家人', 'Teacher'], {
+      cwd: directory, timeout: 120_000,
+    });
+    assert.equal(execFileSync(process.execPath, [program, '--deliver', '家人', 'Teacher'], {
+      cwd: directory, encoding: 'utf8',
+    }), '[Teacher] NanoClaw: 老师独立消息\n');
+    execFileSync(process.execPath, [program, '--process-container', '家人', 'Teacher'], {
+      cwd: directory, timeout: 120_000,
+    });
+    assert.equal(execFileSync(process.execPath, [program, '--deliver', '家人', 'Teacher'], {
+      cwd: directory, encoding: 'utf8',
+    }), '');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
