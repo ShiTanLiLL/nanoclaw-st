@@ -9,6 +9,9 @@ import { runContainer } from '../src/container-runner.js';
 import { enqueueInbound, mailboxPaths, processInbox } from '../src/mailbox.js';
 import { DatabaseSync } from 'node:sqlite';
 
+// 测试进程固定本地模式，VS Code 单独运行时也不会调用付费模型。
+process.env.AI_PROVIDER = 'local';
+
 /** 用真实 Node 处理器代替 docker 命令，验证启动边界和邮箱链；不要求本机安装 Docker。 */
 test('容器启动只挂载当前聊天的输入和输出，处理结果留在宿主邮箱', async () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'nanoclaw-container-command-'));
@@ -46,14 +49,14 @@ test('容器启动只挂载当前聊天的输入和输出，处理结果留在�
 });
 
 /** 第 9 课已有的输出邮箱移动到独立目录后，消息 ID 保持不变，不重复生成。 */
-test('已有输出邮箱迁移目录后保留回复和消息编号', () => {
+test('已有输出邮箱迁移目录后保留回复和消息编号', async () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'nanoclaw-container-layout-'));
   try {
     enqueueInbound(directory, '家人', '@Andy 你好');
-    processInbox(directory, '家人');
+    await processInbox(directory, '家人');
     const paths = mailboxPaths(directory, '家人');
     renameSync(paths.outbound, path.join(paths.directory, 'outbound.db'));
-    processInbox(directory, '家人');
+    await processInbox(directory, '家人');
     const outbound = new DatabaseSync(paths.outbound, { readOnly: true });
     try {
       const rows = outbound.prepare('SELECT id, inbound_id, reply FROM replies').all();

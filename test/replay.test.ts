@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+process.env.AI_PROVIDER = 'local'; // 文件重放测试不调用云端模型。
+
 /**
  * 从现成文本文件接收多行消息，仍走原来的队列、聊天记忆和终端回复链。
  * 临时目录隔离输入文件与 conversation.db，避免影响真实会话。

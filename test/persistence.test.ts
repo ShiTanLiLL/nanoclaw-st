@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+process.env.AI_PROVIDER = 'local'; // 跨进程回归固定本地回复，不调用云端模型。
+
 /** 从新的 SQLite 数据库查询用户正文，返回 CLI 呈现的 ID、聊天和正文。 */
 function searchSavedMessages(program: string, directory: string, keyword: string): string {
   const result = spawnSync(process.execPath, [program, '--search', keyword], {

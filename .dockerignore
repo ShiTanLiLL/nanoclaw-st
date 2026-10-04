@@ -1,5 +1,6 @@
 **
 !package.json
+!pnpm-lock.yaml
 !container/
 !container/Dockerfile
 !dist/
@@ -7,3 +8,4 @@
 !dist/src/agent-runner.js
 !dist/src/processor.js
 !dist/src/reply.js
+!dist/src/provider.js

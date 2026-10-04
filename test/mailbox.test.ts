@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+process.env.AI_PROVIDER = 'local'; // 只验证邮箱链，不继承终端中的真实模型选择。
+
 /** 在同一个临时工作目录执行一次 CLI，保留文件供下一个进程继续使用。 */
 function run(program: string, directory: string, args: string[], input?: string) {
   const result = spawnSync(process.execPath, [program, ...args], {

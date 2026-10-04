@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+process.env.AI_PROVIDER = 'local'; // 搜索测试的写入阶段使用确定性回复。
+
 /**
  * 两个聊天写入同一数据库后，可以跨聊天按正文查询，并看到稳定的消息 ID。
  * 使用真实 CLI 进程检查写入、重启和搜索的完整链条。

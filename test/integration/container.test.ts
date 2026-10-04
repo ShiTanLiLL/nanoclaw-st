@@ -7,6 +7,9 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { containerArguments, CONTAINER_IMAGE } from '../../src/container-runner.js';
 
+// 真实 Docker 测试验证运行边界；回复固定用本地模式，不调用云端模型。
+process.env.AI_PROVIDER = 'local';
+
 /** 实际容器往返与权限验证；单独用 pnpm test:container 执行，需要 Docker 和已构建镜像。 */
 test('真实容器只读输入、写回输出，宿主可投递且重复处理不重发', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'nanoclaw-real-container-'));

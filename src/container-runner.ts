@@ -3,8 +3,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { mailboxPaths, prepareMailbox } from './mailbox.js';
+import { providerSettings } from './provider.js';
 
-export const CONTAINER_IMAGE = 'nanoclaw-st-agent:lesson10';
+export const CONTAINER_IMAGE = 'nanoclaw-st-agent:lesson11';
 const execFileAsync = promisify(execFile);
 
 /** 直接传参数数组启动 Docker，等待本轮处理器退出；启动失败向调用者抛出。 */
@@ -13,12 +14,21 @@ async function executeDocker(args: string[]): Promise<void> {
 }
 
 /** 为一个聊天生成运行命令：只挂载该聊天的入站文件与独立输出目录。 */
-export function containerArguments(baseDirectory: string, chatId: string): string[] {
+export function containerArguments(
+  baseDirectory: string,
+  chatId: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
   const paths = mailboxPaths(path.resolve(baseDirectory), chatId);
+  const settings = providerSettings(environment);
+  const modelEnvironment = settings.name === 'anthropic'
+    ? ['--env', 'ANTHROPIC_API_KEY', '--env', 'ANTHROPIC_MODEL', '--env', 'ANTHROPIC_BASE_URL']
+    : [];
   // Linux 宿主的数字 UID/GID，让输出文件仍归当前用户，避免容器留下 root 文件。
   if (!process.getuid || !process.getgid) throw new Error('本课容器启动器需要 Linux/WSL 环境');
   return [
-    'run', '--rm', '--read-only', '--network', 'none',
+    'run', '--rm', '--read-only', '--network', settings.name === 'local' ? 'none' : 'bridge',
+    '--env', `AI_PROVIDER=${settings.name}`, ...modelEnvironment,
     '--user', `${process.getuid()}:${process.getgid()}`,
     '--mount', `type=bind,src=${paths.inbound},dst=/input/inbound.db,readonly`,
     '--mount', `type=bind,src=${paths.outputDirectory},dst=/output`,

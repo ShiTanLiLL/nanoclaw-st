@@ -53,11 +53,11 @@ export function enqueueInbound(
 }
 
 /** 处理器轮询一次：只读入站；以 inbound_id 唯一约束确认处理并只写出站。 */
-export function processInbox(baseDirectory: string, chatId: string): void {
+export async function processInbox(baseDirectory: string, chatId: string): Promise<void> {
   const paths = mailboxPaths(baseDirectory, chatId);
   if (!existsSync(paths.inbound)) return;
   prepareMailbox(baseDirectory, chatId);
-  processMailbox(paths.inbound, paths.outbound);
+  await processMailbox(paths.inbound, paths.outbound);
 }
 
 /** 宿主只读出站，把未确认的回信输出后，在自己的中心库记录投递确认。 */

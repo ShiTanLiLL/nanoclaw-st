@@ -57,7 +57,7 @@ async function processMessages(
     enqueueInbound(process.cwd(), chatId, text, previousMessage);
     appendUserMessage(database, chatId, body);
     if (autoProcess) {
-      processInbox(process.cwd(), chatId);
+      await processInbox(process.cwd(), chatId);
       deliverReplies(process.cwd(), chatId, database);
     }
   });
@@ -108,8 +108,8 @@ export async function runReceive(): Promise<void> {
 }
 
 /** 仅处理指定聊天的待办入站消息；可以由另一个 Node 进程执行。 */
-export function runProcess(chatId: string): void {
-  processInbox(process.cwd(), chatId);
+export async function runProcess(chatId: string): Promise<void> {
+  await processInbox(process.cwd(), chatId);
 }
 
 /** 宿主启动隔离处理器并等它处理完当前消息；回复仍由 --deliver 投递。 */
@@ -150,7 +150,7 @@ if (currentFile === invokedFile) {
   } else if (process.argv.length === 3 && process.argv[2] === '--receive') {
     await runReceive();
   } else if (process.argv.length === 4 && process.argv[2] === '--process') {
-    runProcess(process.argv[3]);
+    await runProcess(process.argv[3]);
   } else if (process.argv.length === 4 && process.argv[2] === '--process-container') {
     await runContainerProcess(process.argv[3]);
   } else if (process.argv.length === 4 && process.argv[2] === '--deliver') {

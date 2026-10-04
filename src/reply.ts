@@ -10,15 +10,17 @@ export function replyToText(
 ): { body: string; reply: string } | null {
   const message = triggeredBody(text);
   if (message === null) return null;
+  return { body: message, reply: replyToBody(message, previousMessage) };
+}
 
+/** 对已经去掉触发词的正文生成旧版确定性回复，供本地 Provider 复用。 */
+export function replyToBody(message: string, previousMessage?: string): string {
   if (message === '我刚才说了什么？') {
-    const reply = previousMessage === undefined
+    return previousMessage === undefined
       ? 'NanoClaw: 这是本次对话的第一句话。'
       : `NanoClaw: 你刚才说：${previousMessage}`;
-    return { body: message, reply };
   }
-
-  return { body: message, reply: `NanoClaw: ${message}` };
+  return `NanoClaw: ${message}`;
 }
 
 /** 宿主收信时只判断是否真的呼叫助手，不在这里生成或保存回复。 */
