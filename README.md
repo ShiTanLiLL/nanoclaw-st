@@ -45,7 +45,7 @@ pnpm container:build
 pnpm test:container
 ```
 
-普通 `pnpm test` 为 18 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
+普通 `pnpm test` 为 20 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
 真实 Docker 测试。两组业务数据都隔离在临时目录。
 要处理自己已收进邮箱的消息，用 `--process-container 家人` 替换上面的
 `--process 家人`，再 `--deliver 家人`。处理器代码变更后需重新构建镜像。
@@ -121,3 +121,23 @@ Teacher回复带`[Teacher]`标识，各自只记住路由给自己的上一句�
 只读取当前会话入站正文、上一句与角色快照；中心库仍由宿主掌管。
 完整阅读、数据说明和真实模型验收见
 [第12课教案](tutorial/教案/第12课-一个聊天连接多个助手.md)。
+
+## 第 13 课：未来或周期消息
+
+宿主把任务保存于中央库，到期使用现有聊天路由与模型链。登记不请求模型：
+
+```bash
+pnpm build
+node dist/src/main.js --wire 定时课堂 Teacher mention '@Teacher' '你是耐心的TypeScript老师，用中文出题。'
+lesson13_at=$(node -e 'console.log(new Date(Date.now()+30000).toISOString())')
+node dist/src/main.js --schedule 定时课堂 "$lesson13_at" once '@Teacher 给我一道闭包练习，先不公布答案。'
+node dist/src/main.js --tasks
+node --env-file=.env dist/src/main.js --watch
+```
+
+一次扫描用`--sweep`，持续运行用`--watch`，只启动一个扫描进程。
+Ctrl+C等当前批次结束后退出；退出不删除任务。once可换成周期毫秒，但会持续
+请求模型并收费，建议先体验一次任务。周期漏跑只补一轮，不补发所有错过的轮次。
+本课调度和自动模型执行都在宿主，容器处理器未改，镜像继续lesson12。
+尚无取消任务或自动恢复命令；失败及跨库崩溃可能重复执行。
+完整说明见[第13课教案](tutorial/教案/第13课-让消息按时间自动触发.md)。

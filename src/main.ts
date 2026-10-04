@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { readFile } from 'node:fs/promises';
 import type { DatabaseSync } from 'node:sqlite';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { createMessageQueue } from './message-queue.js';
 import { runContainer } from './container-runner.js';
 import { deliverReplies, enqueueInbound, processInbox } from './mailbox.js';
+import { scheduleTask, sweepDueTasks } from './scheduler.js';
 import {
   appendSessionMessage, getSession, lastSessionMessage, routeMessage, wireAgent,
 } from './router.js';
@@ -40,8 +42,34 @@ async function openCurrentDatabase(): Promise<DatabaseSync> {
   );
 }
 
+/** 宿主共同消息链：终端、文件与定时任务都在此路由、留信、更新记忆和投递。 */
+async function handleMessage(
+  database: DatabaseSync, chatId: string, text: string, autoProcess: boolean,
+): Promise<boolean> {
+  const routes = routeMessage(database, chatId, text);
+  if (routes.length === 0) return false;
+  // 先给所有目标留信；同一聊天的不同助手读取各自的上一句。
+  const sessions = routes.map((route) => {
+    const session = getSession(database, chatId, route.agentId);
+    const previousMessage = lastSessionMessage(database, session.id);
+    enqueueInbound(process.cwd(), session.mailboxKey, text, previousMessage, route);
+    appendSessionMessage(database, session.id, route.body);
+    return session;
+  });
+  // 搜索仍按聊天记录，一条输入不会因为命中两位助手而重复保存。
+  appendUserMessage(database, chatId, routes[0].body);
+  if (autoProcess) {
+    for (const session of sessions) {
+      await processInbox(process.cwd(), session.mailboxKey);
+      const prefix = session.agentId === 'Andy' ? '' : `[${session.agentId}] `;
+      deliverReplies(process.cwd(), session.mailboxKey, database, prefix);
+    }
+  }
+  return true;
+}
+
 /**
- * 宿主处理逐行消息：路由后给各会话留信；自动模式再顺序处理与投递。
+ * 宿主处理逐行消息：保留输入队列，再调用共同消息链。
  * lines 可以由终端陆续提供，也可以是从文本文件拆出的现成数组。
  */
 async function processMessages(
@@ -51,26 +79,7 @@ async function processMessages(
 ): Promise<void> {
   const queue = createMessageQueue(async (line) => {
     const { chatId, text } = parseChatLine(line);
-    const routes = routeMessage(database, chatId, text);
-    if (routes.length === 0) return;
-
-    // 先给所有目标留信；同一聊天的不同助手读取各自的上一句。
-    const sessions = routes.map((route) => {
-      const session = getSession(database, chatId, route.agentId);
-      const previousMessage = lastSessionMessage(database, session.id);
-      enqueueInbound(process.cwd(), session.mailboxKey, text, previousMessage, route);
-      appendSessionMessage(database, session.id, route.body);
-      return session;
-    });
-    // 搜索仍按聊天记录，一条输入不会因为命中两位助手而重复保存。
-    appendUserMessage(database, chatId, routes[0].body);
-    if (autoProcess) {
-      for (const session of sessions) {
-        await processInbox(process.cwd(), session.mailboxKey);
-        const prefix = session.agentId === 'Andy' ? '' : `[${session.agentId}] `;
-        deliverReplies(process.cwd(), session.mailboxKey, database, prefix);
-      }
-    }
+    await handleMessage(database, chatId, text, autoProcess);
   });
 
   try {
@@ -176,6 +185,54 @@ export async function runSearch(keyword: string): Promise<void> {
   }
 }
 
+/** 宿主保存任务：要求带时区的ISO时间；once表示一次，其余为周期毫秒。 */
+export async function runSchedule(chatId: string, when: string, recurrence: string, text: string): Promise<void> {
+  if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(when)) {
+    throw new Error('时间须为带时区的ISO格式，例如2026-10-04T18:00:00+08:00');
+  }
+  const database = await openCurrentDatabase();
+  try {
+    if (routeMessage(database, chatId, text).length === 0) throw new Error('任务消息未匹配助手，请先配置绑定和触发词');
+    const interval = recurrence === 'once' ? undefined : Number(recurrence);
+    const id = scheduleTask(database, chatId, text, Date.parse(when), interval);
+    process.stdout.write(`任务 ${id} 已保存\n`);
+  } finally { database.close(); }
+}
+
+/** 宿主列出任务及下一次执行时间，不调用模型；done是一次任务正常完成。 */
+export async function runTasks(): Promise<void> {
+  const database = await openCurrentDatabase();
+  try {
+    for (const row of database.prepare('SELECT * FROM scheduled_tasks ORDER BY id').all()) {
+      const recurrence = row.interval_ms === null ? 'once' : `every=${row.interval_ms}ms`;
+      process.stdout.write(`${row.id} [${row.chat_id}] ${row.status} ${new Date(Number(row.next_run)).toISOString()} ${recurrence} ${row.text}\n`);
+    }
+  } finally { database.close(); }
+}
+
+/** 宿主扫描一次或持续轮询；等本轮结束才等下一轮，避免慢模型导致扫描重叠。 */
+export async function runSweep(watch = false): Promise<void> {
+  const database = await openCurrentDatabase();
+  let stopping = false;
+  const stop = () => { stopping = true; };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  try {
+    do {
+      await sweepDueTasks(database, async (chatId, text) => {
+        const matched = await handleMessage(database, chatId, text, true);
+        if (!matched) throw new Error(`任务消息未匹配助手，请检查绑定：${chatId}`);
+      });
+      if (!watch || stopping) break;
+      await delay(1000);
+    } while (!stopping);
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+    database.close();
+  }
+}
+
 // 只有直接执行该文件时才启动 CLI；被测试导入时不会读取测试进程的 stdin。
 const currentFile = fileURLToPath(import.meta.url);
 const invokedFile = process.argv[1] ? path.resolve(process.argv[1]) : '';
@@ -194,9 +251,17 @@ if (currentFile === invokedFile) {
     await runDeliver(process.argv[3], process.argv[4]);
   } else if (process.argv.length === 8 && process.argv[2] === '--wire') {
     await runWire(process.argv[3], process.argv[4], process.argv[5], process.argv[6], process.argv[7]);
+  } else if (process.argv.length === 7 && process.argv[2] === '--schedule') {
+    await runSchedule(process.argv[3], process.argv[4], process.argv[5], process.argv[6]);
+  } else if (process.argv.length === 3 && process.argv[2] === '--tasks') {
+    await runTasks();
+  } else if (process.argv.length === 3 && process.argv[2] === '--sweep') {
+    await runSweep();
+  } else if (process.argv.length === 3 && process.argv[2] === '--watch') {
+    await runSweep(true);
   } else if (process.argv.length === 2) {
     await runCli();
   } else {
-    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID [助手] | --process-container 聊天ID [助手] | --deliver 聊天ID [助手] | --wire 聊天ID 助手 mention|pattern 触发规则 提示词]');
+    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID [助手] | --process-container 聊天ID [助手] | --deliver 聊天ID [助手] | --wire 聊天ID 助手 mention|pattern 规则 提示词 | --schedule 聊天ID ISO时间 once或周期毫秒 消息 | --tasks | --sweep | --watch]');
   }
 }
