@@ -7,8 +7,9 @@
 第 6 课让新消息先进入进程内队列，再按顺序处理。第 7 课增加文本文件重放
 入口。第 8 课把用户正文保存到 SQLite，并能跨聊天按关键词搜索。第 9 课
 增加每个聊天的输入/输出邮箱，宿主与处理器可以分开运行。第 10 课增加
-Docker 处理分支。当前第 11 课新增官方 Anthropic SDK，可选择本地规则或真实
+Docker 处理分支。第 11 课新增官方 Anthropic SDK，可选择本地规则或真实
 模型回复，也支持 DeepSeek 的 Anthropic 兼容接口；未加载配置仍是本地模式。
+第12～15课增加多助手路由、调度、恢复与安全文件、周期审批和只读运行观察。
 课程资料位于 [`tutorial/`](./tutorial/)；最高优先级规则记录在工作区上级传入的
 规范文件中，并由 [`工作守则.md`](./工作守则.md) 摘要维护。
 
@@ -45,7 +46,7 @@ pnpm container:build
 pnpm test:container
 ```
 
-普通 `pnpm test` 为 24 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
+普通 `pnpm test` 为 26 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
 真实 Docker 测试。两组业务数据都隔离在临时目录。
 要处理自己已收进邮箱的消息，用 `--process-container 家人` 替换上面的
 `--process 家人`，再 `--deliver 家人`。处理器代码变更后需重新构建镜像。
@@ -177,3 +178,36 @@ node --env-file=.env dist/src/main.js --recover
 正常重复不重发不代表所有崩溃下恰好一次：API成功但出站未保存、终端输出但确认
 未提交，仍可能重复。完整数据与边界见
 [第14课教案](tutorial/教案/第14课-失败恢复与安全文件消息.md)。
+
+## 第15课：周期审批、只读状态与运行日志
+
+```bash
+pnpm build
+node --env-file=.env dist/src/main.js --status
+node dist/src/main.js --tasks
+```
+
+status不建库、不迁移、不请求模型，只显示配置有效性与中央统计，不输出密钥/
+正文；它不证明云端可用或watch正在运行。新周期任务登记为awaiting_approval，
+一次任务仍pending；旧任务不自动改状态。先停止watch，用实际任务ID管理：
+
+```bash
+node dist/src/main.js --approve-task 1
+node dist/src/main.js --pause-task 1
+```
+
+批准后才扫描，暂停后可用approve恢复；暂停不取消在途请求、不清理邮箱，
+显式recover仍可能请求模型。权限只假设可信本地所有者，不提供多用户认证。
+查看tasks并批准所需任务之后，只启动一个扫描进程：
+
+```bash
+LOG_LEVEL=info node --env-file=.env dist/src/main.js --watch
+```
+
+LOG_LEVEL默认off，info将固定事件写stderr；可自行追加到私人.env，新示例不会
+改变已有配置。stdout仍输出模型回复。结构化事件脱敏不代表所有异常和业务输出
+都脱敏，分享前仍须检查。容器处理器未改，继续lesson14镜像。
+
+详见[第15课教案](tutorial/教案/第15课-整理成可配置可部署可理解的系统.md)与
+[最终心智模型](tutorial/参考/最终心智模型.md)。最终仍需学生真实模型验收、复述
+系统链、提问、手动commit，不把15课代码生成视为学生自动结课。

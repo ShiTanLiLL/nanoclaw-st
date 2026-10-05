@@ -9,7 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { createMessageQueue } from './message-queue.js';
 import { runContainer } from './container-runner.js';
 import { deliverReplies, enqueueInbound, processInbox } from './mailbox.js';
-import { retryTask, scheduleTask, sweepDueTasks } from './scheduler.js';
+import { changeTaskState, retryTask, scheduleTask, sweepDueTasks } from './scheduler.js';
+import { logEvent, logLevel, readRuntimeStatus } from './runtime.js';
 import { expandFileMessage } from './file-message.js';
 import { findReceipt, recordReceipt, receiptTargets, type Receipt } from './receipt.js';
 import {
@@ -38,6 +39,7 @@ function parseChatLine(line: string): { chatId: string; text: string } {
 /** 打开当前工作目录的数据库，并在首次创建时导入旧 JSON 历史。 */
 async function openCurrentDatabase(): Promise<DatabaseSync> {
   const directory = process.cwd();
+  logLevel(); // 在任何业务写入之前检查日志开关。
   return openConversationDatabase(
     path.join(directory, 'conversation.db'),
     path.join(directory, 'conversation.json'),
@@ -56,6 +58,7 @@ async function handleMessage(
     // 安全检查与文件展开先成功，再提交记忆；被拒绝的文件不进入业务数据库。
     const expanded = routes.map((route) => ({ ...route, body: expandFileMessage(process.cwd(), route.body) }));
     receipt = recordReceipt(database, sourceKey, chatId, text, expanded);
+    logEvent('receipt.accepted');
   }
   await processReceipt(database, receipt, autoProcess);
   return true;
@@ -77,8 +80,14 @@ async function processReceipt(database: DatabaseSync, receipt: Receipt, autoProc
       }
     } catch (error) { errors.push(error); }
   }
-  if (errors.length) throw new AggregateError(errors, '部分会话未完成，原消息已保存，可修复后恢复');
-  if (autoProcess) database.prepare("UPDATE receipts SET status = 'done' WHERE id = ?").run(receipt.id);
+  if (errors.length) {
+    logEvent('receipt.failed');
+    throw new AggregateError(errors, '部分会话未完成，原消息已保存，可修复后恢复');
+  }
+  if (autoProcess) {
+    database.prepare("UPDATE receipts SET status = 'done' WHERE id = ?").run(receipt.id);
+    logEvent('receipt.completed');
+  }
 }
 
 /**
@@ -208,7 +217,7 @@ export async function runSchedule(chatId: string, when: string, recurrence: stri
     if (routeMessage(database, chatId, text).length === 0) throw new Error('任务消息未匹配助手，请先配置绑定和触发词');
     const interval = recurrence === 'once' ? undefined : Number(recurrence);
     const id = scheduleTask(database, chatId, text, Date.parse(when), interval);
-    process.stdout.write(`任务 ${id} 已保存\n`);
+    process.stdout.write(`任务 ${id} 已保存${interval === undefined ? '' : '，等待 --approve-task 审批'}\n`);
   } finally { database.close(); }
 }
 
@@ -266,6 +275,18 @@ export async function runRetryTask(id: string): Promise<void> {
   finally { database.close(); }
 }
 
+/** 宿主治理入口：只修改任务状态；请先停止watch，不并发操作同一组业务数据。 */
+export async function runTaskState(id: string, action: 'approve' | 'pause'): Promise<void> {
+  const database = await openCurrentDatabase();
+  try { changeTaskState(database, Number(id), action); }
+  finally { database.close(); }
+}
+
+/** 宿主观察入口不使用openCurrentDatabase，避免状态查看触发建库或旧数据迁移。 */
+export function runStatus(): void {
+  process.stdout.write(`${JSON.stringify(readRuntimeStatus(path.join(process.cwd(), 'conversation.db')), null, 2)}\n`);
+}
+
 // 只有直接执行该文件时才启动 CLI；被测试导入时不会读取测试进程的 stdin。
 const currentFile = fileURLToPath(import.meta.url);
 const invokedFile = process.argv[1] ? path.resolve(process.argv[1]) : '';
@@ -296,9 +317,15 @@ if (currentFile === invokedFile) {
     await runRecover();
   } else if (process.argv.length === 4 && process.argv[2] === '--retry-task') {
     await runRetryTask(process.argv[3]);
+  } else if (process.argv.length === 4 && process.argv[2] === '--approve-task') {
+    await runTaskState(process.argv[3], 'approve');
+  } else if (process.argv.length === 4 && process.argv[2] === '--pause-task') {
+    await runTaskState(process.argv[3], 'pause');
+  } else if (process.argv.length === 3 && process.argv[2] === '--status') {
+    runStatus();
   } else if (process.argv.length === 2) {
     await runCli();
   } else {
-    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID [助手] | --process-container 聊天ID [助手] | --deliver 聊天ID [助手] | --wire 聊天ID 助手 mention|pattern 规则 提示词 | --schedule 聊天ID ISO时间 once或周期毫秒 消息 | --tasks | --sweep | --watch | --recover | --retry-task 任务ID]');
+    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID [助手] | --process-container 聊天ID [助手] | --deliver 聊天ID [助手] | --wire 聊天ID 助手 mention|pattern 规则 提示词 | --schedule 聊天ID ISO时间 once或周期毫秒 消息 | --tasks | --sweep | --watch | --recover | --retry-task 任务ID | --approve-task 任务ID | --pause-task 任务ID | --status]');
   }
 }

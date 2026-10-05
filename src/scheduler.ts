@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { isTransientError } from './retry.js';
+import { logEvent } from './runtime.js';
 
 /** 宿主中心库保存任务定义；邮箱只接收到期时产生的消息，不承担计时。 */
 export function initializeSchedule(database: DatabaseSync): void {
@@ -17,7 +18,7 @@ export function initializeSchedule(database: DatabaseSync): void {
   if (!columns.includes('last_error')) database.exec('ALTER TABLE scheduled_tasks ADD COLUMN last_error TEXT');
 }
 
-/** 宿主登记一次或周期任务；时间为毫秒时间戳，登记本身不发送消息或请求模型。 */
+/** 宿主登记任务：一次可执行，新周期先待审批；毫秒时间戳，登记不请求模型。 */
 export function scheduleTask(
   database: DatabaseSync, chatId: string, text: string, nextRun: number, intervalMs?: number,
 ): number {
@@ -29,8 +30,8 @@ export function scheduleTask(
     throw new Error('周期必须是正整数毫秒');
   }
   const result = database.prepare(
-    'INSERT INTO scheduled_tasks (chat_id, text, next_run, interval_ms) VALUES (?, ?, ?, ?)',
-  ).run(chatId, text, nextRun, intervalMs ?? null);
+    'INSERT INTO scheduled_tasks (chat_id, text, next_run, interval_ms, status) VALUES (?, ?, ?, ?, ?)',
+  ).run(chatId, text, nextRun, intervalMs ?? null, intervalMs === undefined ? 'pending' : 'awaiting_approval');
   return Number(result.lastInsertRowid);
 }
 
@@ -61,6 +62,7 @@ export async function sweepDueTasks(
         .run(failures, retry ? failedAt + 1000 * 2 ** (failures - 1) : 0,
           retry ? 'pending' : 'failed', error instanceof Error ? error.name : 'UnknownError', task.id);
       // 不保存原始错误正文，避免服务错误把凭据或私人内容带入状态字段。
+      logEvent(retry ? 'task.deferred' : 'task.failed', Number(task.id));
       continue;
     }
     if (task.interval_ms === null) {
@@ -74,6 +76,7 @@ export async function sweepDueTasks(
     }
     database.prepare('UPDATE scheduled_tasks SET failures = 0, retry_at = 0, last_error = NULL WHERE id = ?').run(task.id);
     completed += 1;
+    logEvent('task.completed', Number(task.id));
   }
   return completed;
 }
@@ -84,4 +87,15 @@ export function retryTask(database: DatabaseSync, id: number): void {
   const result = database.prepare(`UPDATE scheduled_tasks SET status = 'pending',
     failures = 0, retry_at = 0, last_error = NULL WHERE id = ? AND status = 'failed'`).run(id);
   if (result.changes === 0) throw new Error('没有找到该failed任务');
+}
+
+/** 本地所有者批准周期任务或恢复暂停任务；暂停只阻止之后扫描，不取消在途请求。 */
+export function changeTaskState(database: DatabaseSync, id: number, action: 'approve' | 'pause'): void {
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('任务ID须为正整数');
+  const sql = action === 'approve'
+    ? "UPDATE scheduled_tasks SET status = 'pending' WHERE id = ? AND status IN ('awaiting_approval', 'paused')"
+    : "UPDATE scheduled_tasks SET status = 'paused' WHERE id = ? AND status = 'pending'";
+  const result = database.prepare(sql).run(id);
+  if (result.changes === 0) throw new Error('任务不存在或当前状态不允许该操作');
+  logEvent(action === 'approve' ? 'task.approved' : 'task.paused', id);
 }

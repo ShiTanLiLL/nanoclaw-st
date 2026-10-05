@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initializeSchedule, scheduleTask, sweepDueTasks } from '../src/scheduler.js';
+import { changeTaskState, initializeSchedule, scheduleTask, sweepDueTasks } from '../src/scheduler.js';
 
 /** 用显式时间代替真实等待，验证未到期、一次完成、周期跳过漏跑和失败不确认。 */
 test('任务到期才执行，一次任务完成，周期任务推进且正常重复扫描不重发', async () => {
@@ -17,7 +17,8 @@ test('任务到期才执行，一次任务完成，周期任务推进且正常�
   try {
     initializeSchedule(db);
     scheduleTask(db, '课堂', '@Andy 一次提醒', 1000);
-    scheduleTask(db, '课堂', '@Teacher 周期问题', 1000, 1000);
+    const recurring = scheduleTask(db, '课堂', '@Teacher 周期问题', 1000, 1000);
+    changeTaskState(db, recurring, 'approve'); // 第15课起，新周期任务须所有者明确审批。
     const received: string[] = [];
     const receive = async (chat: string, text: string) => { received.push(`${chat}:${text}`); };
     assert.equal(await sweepDueTasks(db, receive, 999), 0);
