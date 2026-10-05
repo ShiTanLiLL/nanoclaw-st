@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mailboxPaths, prepareMailbox } from './mailbox.js';
 import { providerSettings } from './provider.js';
 
-export const CONTAINER_IMAGE = 'nanoclaw-st-agent:lesson12';
+export const CONTAINER_IMAGE = 'nanoclaw-st-agent:lesson14';
 const execFileAsync = promisify(execFile);
 
 /** 直接传参数数组启动 Docker，等待本轮处理器退出；启动失败向调用者抛出。 */

@@ -28,8 +28,9 @@ test('任务到期才执行，一次任务完成，周期任务推进且正常�
     const rows = db.prepare('SELECT status, next_run FROM scheduled_tasks ORDER BY id').all();
     assert.equal(rows[0].status, 'done');
     assert.equal(rows[1].next_run, 5000);
-    await assert.rejects(sweepDueTasks(db, async () => { throw new Error('生成失败'); }, 5000));
+    assert.equal(await sweepDueTasks(db, async () => { throw new Error('生成失败'); }, 5000), 0);
     assert.equal(db.prepare('SELECT next_run FROM scheduled_tasks WHERE id = 2').get()!.next_run, 5000);
+    assert.equal(db.prepare('SELECT status FROM scheduled_tasks WHERE id = 2').get()!.status, 'failed');
     assert.throws(() => scheduleTask(db, '', '消息', 1000));
     assert.throws(() => scheduleTask(db, '课堂', '消息', NaN));
     assert.throws(() => scheduleTask(db, '课堂', '消息', 1000, 0));

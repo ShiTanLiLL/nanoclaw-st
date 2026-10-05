@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { loadHistories } from './history.js';
 import { initializeRouting } from './router.js';
 import { initializeSchedule } from './scheduler.js';
+import { initializeReceipts } from './receipt.js';
 
 export type StoredMessage = { id: number; chatId: string; body: string };
 
@@ -51,6 +52,7 @@ export async function openConversationDatabase(
     }
     initializeRouting(database);
     initializeSchedule(database);
+    initializeReceipts(database);
     return database;
   } catch (error) {
     database.close();

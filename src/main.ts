@@ -4,16 +4,18 @@ import { createInterface } from 'node:readline/promises';
 import { readFile } from 'node:fs/promises';
 import type { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
+import { randomUUID } from 'node:crypto';
 
 import { createMessageQueue } from './message-queue.js';
 import { runContainer } from './container-runner.js';
 import { deliverReplies, enqueueInbound, processInbox } from './mailbox.js';
-import { scheduleTask, sweepDueTasks } from './scheduler.js';
+import { retryTask, scheduleTask, sweepDueTasks } from './scheduler.js';
+import { expandFileMessage } from './file-message.js';
+import { findReceipt, recordReceipt, receiptTargets, type Receipt } from './receipt.js';
 import {
-  appendSessionMessage, getSession, lastSessionMessage, routeMessage, wireAgent,
+  getSession, routeMessage, wireAgent,
 } from './router.js';
 import {
-  appendUserMessage,
   openConversationDatabase,
   searchMessages,
 } from './store.js';
@@ -42,30 +44,41 @@ async function openCurrentDatabase(): Promise<DatabaseSync> {
   );
 }
 
-/** 宿主共同消息链：终端、文件与定时任务都在此路由、留信、更新记忆和投递。 */
+/** 宿主共同消息链：首次记录凭据和正文；重复事件复用快照，不重复写记忆。 */
 async function handleMessage(
   database: DatabaseSync, chatId: string, text: string, autoProcess: boolean,
+  sourceKey: string = randomUUID(),
 ): Promise<boolean> {
-  const routes = routeMessage(database, chatId, text);
-  if (routes.length === 0) return false;
-  // 先给所有目标留信；同一聊天的不同助手读取各自的上一句。
-  const sessions = routes.map((route) => {
-    const session = getSession(database, chatId, route.agentId);
-    const previousMessage = lastSessionMessage(database, session.id);
-    enqueueInbound(process.cwd(), session.mailboxKey, text, previousMessage, route);
-    appendSessionMessage(database, session.id, route.body);
-    return session;
-  });
-  // 搜索仍按聊天记录，一条输入不会因为命中两位助手而重复保存。
-  appendUserMessage(database, chatId, routes[0].body);
-  if (autoProcess) {
-    for (const session of sessions) {
-      await processInbox(process.cwd(), session.mailboxKey);
-      const prefix = session.agentId === 'Andy' ? '' : `[${session.agentId}] `;
-      deliverReplies(process.cwd(), session.mailboxKey, database, prefix);
-    }
+  let receipt = findReceipt(database, sourceKey);
+  if (!receipt) {
+    const routes = routeMessage(database, chatId, text);
+    if (routes.length === 0) return false;
+    // 安全检查与文件展开先成功，再提交记忆；被拒绝的文件不进入业务数据库。
+    const expanded = routes.map((route) => ({ ...route, body: expandFileMessage(process.cwd(), route.body) }));
+    receipt = recordReceipt(database, sourceKey, chatId, text, expanded);
   }
+  await processReceipt(database, receipt, autoProcess);
   return true;
+}
+
+/** 宿主恢复原凭据；逐会话留信和处理，一位失败不阻止另一位，已有结果不重发。 */
+async function processReceipt(database: DatabaseSync, receipt: Receipt, autoProcess = true): Promise<void> {
+  if (receipt.status === 'done') return;
+  const errors: unknown[] = [];
+  for (const target of receiptTargets(database, receipt.id)) {
+    try {
+      enqueueInbound(process.cwd(), target.mailboxKey, receipt.text, target.previousMessage, {
+        body: target.body, systemPrompt: target.systemPrompt, sourceKey: receipt.id,
+      });
+      if (autoProcess) {
+        await processInbox(process.cwd(), target.mailboxKey);
+        const prefix = target.agentId === 'Andy' ? '' : `[${target.agentId}] `;
+        deliverReplies(process.cwd(), target.mailboxKey, database, prefix);
+      }
+    } catch (error) { errors.push(error); }
+  }
+  if (errors.length) throw new AggregateError(errors, '部分会话未完成，原消息已保存，可修复后恢复');
+  if (autoProcess) database.prepare("UPDATE receipts SET status = 'done' WHERE id = ?").run(receipt.id);
 }
 
 /**
@@ -205,7 +218,7 @@ export async function runTasks(): Promise<void> {
   try {
     for (const row of database.prepare('SELECT * FROM scheduled_tasks ORDER BY id').all()) {
       const recurrence = row.interval_ms === null ? 'once' : `every=${row.interval_ms}ms`;
-      process.stdout.write(`${row.id} [${row.chat_id}] ${row.status} ${new Date(Number(row.next_run)).toISOString()} ${recurrence} ${row.text}\n`);
+      process.stdout.write(`${row.id} [${row.chat_id}] ${row.status} ${new Date(Number(row.next_run)).toISOString()} ${recurrence} failures=${row.failures} retry_at=${row.retry_at} ${row.text}\n`);
     }
   } finally { database.close(); }
 }
@@ -219,8 +232,8 @@ export async function runSweep(watch = false): Promise<void> {
   process.on('SIGTERM', stop);
   try {
     do {
-      await sweepDueTasks(database, async (chatId, text) => {
-        const matched = await handleMessage(database, chatId, text, true);
+      await sweepDueTasks(database, async (chatId, text, sourceKey) => {
+        const matched = await handleMessage(database, chatId, text, true, sourceKey);
         if (!matched) throw new Error(`任务消息未匹配助手，请检查绑定：${chatId}`);
       });
       if (!watch || stopping) break;
@@ -231,6 +244,26 @@ export async function runSweep(watch = false): Promise<void> {
     process.off('SIGTERM', stop);
     database.close();
   }
+}
+
+/** 宿主恢复所有未完成凭据；沿用原邮箱与记忆，失败汇总后报告，不阻止其他凭据。 */
+export async function runRecover(): Promise<void> {
+  const database = await openCurrentDatabase();
+  const errors: unknown[] = [];
+  try {
+    for (const row of database.prepare("SELECT id FROM receipts WHERE status = 'pending' ORDER BY rowid").all()) {
+      try { await processReceipt(database, findReceipt(database, String(row.id))!); }
+      catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, '仍有消息未完成，请检查配置后再恢复');
+  } finally { database.close(); }
+}
+
+/** 宿主在用户明确修复问题后重新启用failed任务，保留原轮次身份与接收快照。 */
+export async function runRetryTask(id: string): Promise<void> {
+  const database = await openCurrentDatabase();
+  try { retryTask(database, Number(id)); }
+  finally { database.close(); }
 }
 
 // 只有直接执行该文件时才启动 CLI；被测试导入时不会读取测试进程的 stdin。
@@ -259,9 +292,13 @@ if (currentFile === invokedFile) {
     await runSweep();
   } else if (process.argv.length === 3 && process.argv[2] === '--watch') {
     await runSweep(true);
+  } else if (process.argv.length === 3 && process.argv[2] === '--recover') {
+    await runRecover();
+  } else if (process.argv.length === 4 && process.argv[2] === '--retry-task') {
+    await runRetryTask(process.argv[3]);
   } else if (process.argv.length === 2) {
     await runCli();
   } else {
-    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID [助手] | --process-container 聊天ID [助手] | --deliver 聊天ID [助手] | --wire 聊天ID 助手 mention|pattern 规则 提示词 | --schedule 聊天ID ISO时间 once或周期毫秒 消息 | --tasks | --sweep | --watch]');
+    throw new Error('用法：node dist/src/main.js [--replay 文件 | --search 词 | --receive | --process 聊天ID [助手] | --process-container 聊天ID [助手] | --deliver 聊天ID [助手] | --wire 聊天ID 助手 mention|pattern 规则 提示词 | --schedule 聊天ID ISO时间 once或周期毫秒 消息 | --tasks | --sweep | --watch | --recover | --retry-task 任务ID]');
   }
 }

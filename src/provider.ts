@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { replyToBody } from './reply.js';
+import { retryTransient } from './retry.js';
 
 /** 回复函数约定：正文、会话上一句和可选角色进来，完整回复异步返回。 */
 export type ReplyProvider = (body: string, previousMessage?: string, systemPrompt?: string) => Promise<string>;
@@ -30,14 +31,14 @@ export function createAnthropicProvider(client: Anthropic, model: string): Reply
     const content = previousMessage === undefined
       ? body
       : `上一条用户消息：${previousMessage}\n当前用户消息：${body}`;
-    const response = await client.messages.create({
+    const response = await retryTransient(() => client.messages.create({
       model,
       max_tokens: 1024,
       // 当前只需要直接文本回答；兼容服务的默认思考模式可能耗尽短输出预算。
       thinking: { type: 'disabled' },
       system: systemPrompt ?? '你是个人助手 NanoClaw。用中文简洁回答当前用户消息；上一条用户消息仅作为上下文。',
       messages: [{ role: 'user', content }],
-    });
+    }));
     const parts: string[] = [];
     for (const block of response.content) {
       if (block.type === 'text') parts.push(block.text);
@@ -48,7 +49,7 @@ export function createAnthropicProvider(client: Anthropic, model: string): Reply
   };
 }
 
-/** 在实际运行的一侧选择回复方式；SDK 重试暂关闭，失败由邮箱处理链向上报告。 */
+/** SDK内建重试关闭；由可阅读的retryTransient统一控制有限重试。 */
 export function createProvider(environment: NodeJS.ProcessEnv = process.env): ReplyProvider {
   const settings = providerSettings(environment);
   if (settings.name === 'local') return localProvider;

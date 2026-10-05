@@ -4,6 +4,6 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --prod --frozen-lockfile
-COPY dist/src/agent-runner.js dist/src/processor.js dist/src/reply.js dist/src/provider.js ./
+COPY dist/src/agent-runner.js dist/src/processor.js dist/src/reply.js dist/src/provider.js dist/src/retry.js ./
 USER node
 ENTRYPOINT ["node", "/app/agent-runner.js"]

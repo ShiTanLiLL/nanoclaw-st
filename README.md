@@ -45,7 +45,7 @@ pnpm container:build
 pnpm test:container
 ```
 
-普通 `pnpm test` 为 20 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
+普通 `pnpm test` 为 24 项测试，不依赖 Docker；`pnpm test:container` 为 1 项
 真实 Docker 测试。两组业务数据都隔离在临时目录。
 要处理自己已收进邮箱的消息，用 `--process-container 家人` 替换上面的
 `--process 家人`，再 `--deliver 家人`。处理器代码变更后需重新构建镜像。
@@ -95,7 +95,7 @@ node --env-file=.env dist/src/main.js --process-container 模型演示
 node dist/src/main.js --deliver 模型演示
 ```
 
-当前第 12 课镜像为 `nanoclaw-st-agent:lesson12`。调用真实 API 会发送当前正文和
+当前镜像为 `nanoclaw-st-agent:lesson14`。调用真实 API 会发送当前正文和
 至多上一句用户正文，可能产生API费用；本地自动测试不请求云端。
 SDK请求由本地模拟HTTP服务验证，云端权限与实际回答需要你用自己的配置验收。
 
@@ -117,7 +117,7 @@ Teacher回复带`[Teacher]`标识，各自只记住路由给自己的上一句�
 
 分段命令可增加助手名：`--process 课堂 Teacher`、
 `--process-container 课堂 Teacher`、`--deliver 课堂 Teacher`。
-省略助手仍只处理Andy，不表示处理所有助手。容器使用lesson12镜像，
+省略助手仍只处理Andy，不表示处理所有助手。第12课引入lesson12镜像，
 只读取当前会话入站正文、上一句与角色快照；中心库仍由宿主掌管。
 完整阅读、数据说明和真实模型验收见
 [第12课教案](tutorial/教案/第12课-一个聊天连接多个助手.md)。
@@ -138,6 +138,42 @@ node --env-file=.env dist/src/main.js --watch
 一次扫描用`--sweep`，持续运行用`--watch`，只启动一个扫描进程。
 Ctrl+C等当前批次结束后退出；退出不删除任务。once可换成周期毫秒，但会持续
 请求模型并收费，建议先体验一次任务。周期漏跑只补一轮，不补发所有错过的轮次。
-本课调度和自动模型执行都在宿主，容器处理器未改，镜像继续lesson12。
-尚无取消任务或自动恢复命令；失败及跨库崩溃可能重复执行。
+第13课调度和自动模型执行都在宿主，当时容器处理器未改，镜像继续lesson12。
+第13课阶段尚无取消任务或自动恢复命令；第14课补上有限恢复，仍不支持取消任务。
 完整说明见[第13课教案](tutorial/教案/第13课-让消息按时间自动触发.md)。
+
+## 第14课：有限重试、原消息恢复与安全文件
+
+真实模型连接错误、429/5xx最多三次请求，等待100/200ms；401等不自动重试。
+任务执行失败保存failures/retry_at，临时错误最多三轮，其他错误直接failed，
+不会让失败任务打断整个扫描。--tasks展示状态；修复后--retry-task编号再扫描。
+本轮next_run保持不变，恢复时不会另造一条输入或重复写会话记忆。
+
+宿主中央库保存receipts及目标快照，邮箱source_key唯一。--recover恢复所有
+pending凭据，沿用原角色、正文和上一句；已经成功处理/投递的部分正常不重做。
+重新键入相同文字仍是新输入，不是恢复。升级前旧输入无凭据，仍用旧分段命令。
+
+```bash
+pnpm build
+node dist/src/main.js --wire 文件课堂 Teacher mention '@Teacher' '你是耐心的TypeScript老师，用中文讲解笔记。'
+pnpm start:model
+```
+
+输入`[文件课堂] @Teacher /file 示例笔记.md 用两句话总结`，宿主只读取
+attachments内的普通.md/.txt UTF-8文件（最多16KiB），拒绝路径跳转与链接，
+把文本快照交给模型。不挂载原附件给容器，私人附件默认Git忽略。
+收信后稍后执行可用--receive，再运行：
+
+```bash
+node --env-file=.env dist/src/main.js --recover
+```
+
+--recover会处理所有未完成凭据并可能收费；不是只读状态命令，也不更新任务账目。
+手动重启任务用`node dist/src/main.js --retry-task 1`后加载.env执行--sweep。
+不要并发启动扫描与恢复。当前短重试与任务预算可能相乘为每个目标最多九次
+自动HTTP请求；永久错误不重试，人工恢复是另一次明确尝试。
+
+容器运行前重建lesson14镜像，它新增retry.js依赖，仍只挂载原输入和输出。
+正常重复不重发不代表所有崩溃下恰好一次：API成功但出站未保存、终端输出但确认
+未提交，仍可能重复。完整数据与边界见
+[第14课教案](tutorial/教案/第14课-失败恢复与安全文件消息.md)。

@@ -36,7 +36,7 @@ export function enqueueInbound(
   chatId: string,
   text: string,
   previousMessage?: string,
-  route?: { body: string; systemPrompt: string },
+  route?: { body: string; systemPrompt: string; sourceKey?: string },
 ): void {
   const paths = prepareMailbox(baseDirectory, chatId);
   const inbound = new DatabaseSync(paths.inbound);
@@ -50,8 +50,12 @@ export function enqueueInbound(
     const columns = inbound.prepare('PRAGMA table_info(messages)').all().map((row) => String(row.name));
     if (!columns.includes('body')) inbound.exec('ALTER TABLE messages ADD COLUMN body TEXT');
     if (!columns.includes('system_prompt')) inbound.exec('ALTER TABLE messages ADD COLUMN system_prompt TEXT');
-    inbound.prepare('INSERT INTO messages (text, previous_body, body, system_prompt) VALUES (?, ?, ?, ?)')
-      .run(text, previousMessage ?? null, route?.body ?? null, route?.systemPrompt ?? null);
+    if (!columns.includes('source_key')) inbound.exec('ALTER TABLE messages ADD COLUMN source_key TEXT');
+    inbound.exec('CREATE UNIQUE INDEX IF NOT EXISTS messages_source ON messages(source_key)');
+    // 同一凭据每个会话只留一封信；旧行source_key为null，可以有多行，不影响旧消息。
+    inbound.prepare(`INSERT INTO messages (text, previous_body, body, system_prompt, source_key)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(source_key) DO NOTHING`)
+      .run(text, previousMessage ?? null, route?.body ?? null, route?.systemPrompt ?? null, route?.sourceKey ?? null);
   } finally {
     inbound.close();
   }

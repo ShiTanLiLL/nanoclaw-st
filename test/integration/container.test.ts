@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -27,6 +27,7 @@ test('真实容器只读输入、写回输出，宿主可投递且重复处理�
       const assert = require('node:assert/strict');
       assert.throws(() => fs.writeFileSync('/input/inbound.db', 'cannot overwrite'));
       assert.equal(fs.existsSync('/app/conversation.db'), false);
+      assert.equal(fs.existsSync('/app/attachments'), false);
       assert.deepEqual(fs.readdirSync('/input'), ['inbound.db']);
       fs.writeFileSync('/output/mount-probe.txt', 'output is writable');
     `;
@@ -70,6 +71,18 @@ test('真实容器只读输入、写回输出，宿主可投递且重复处理�
     assert.equal(execFileSync(process.execPath, [program, '--deliver', '家人', 'Teacher'], {
       cwd: directory, encoding: 'utf8',
     }), '');
+    // 宿主读取原文件，容器只读入站里的正文快照，没有附件目录挂载。
+    mkdirSync(path.join(directory, 'attachments'));
+    writeFileSync(path.join(directory, 'attachments', '笔记.md'), '闭包笔记');
+    execFileSync(process.execPath, [program, '--receive'], {
+      cwd: directory, input: '[附件] @Andy /file 笔记.md 请总结\n',
+    });
+    execFileSync(process.execPath, [program, '--process-container', '附件'], {
+      cwd: directory, timeout: 120_000,
+    });
+    assert.equal(execFileSync(process.execPath, [program, '--deliver', '附件'], {
+      cwd: directory, encoding: 'utf8',
+    }), 'NanoClaw: 请总结\n\n文件：笔记.md\n闭包笔记\n');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

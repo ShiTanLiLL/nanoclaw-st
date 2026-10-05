@@ -43,7 +43,7 @@ test('SDK回复通过邮箱保存，重复处理不请求API，API失败保持�
     for await (const chunk of request) raw += chunk.toString();
     requests.push({ url: request.url, key: request.headers['x-api-key'], payload: JSON.parse(raw) });
     response.setHeader('content-type', 'application/json');
-    if (requests.length === 3) {
+    if (requests.length >= 3) {
       response.statusCode = 503;
       response.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: '模拟服务失败' } }));
       return;
@@ -83,7 +83,7 @@ test('SDK回复通过邮箱保存，重复处理不请求API，API失败保持�
 
     enqueueInbound(directory, '家人', '@Andy 服务失败', '我刚才说了什么？');
     await assert.rejects(processMailbox(paths.inbound, paths.outbound, provider), /模拟服务失败/);
-    assert.equal(requests.length, 3);
+    assert.equal(requests.length, 5); // 第三条输入503持续失败：最多三次请求。
     const outbound = new DatabaseSync(paths.outbound, { readOnly: true });
     try {
       assert.deepEqual(outbound.prepare('SELECT reply FROM replies ORDER BY id').all().map((row) => row.reply), [

@@ -9,7 +9,7 @@
     "start": "pnpm build && node dist/src/main.js",
     "start:model": "pnpm build && node --env-file=.env dist/src/main.js",
     "test": "pnpm build && AI_PROVIDER=local node --test dist/test/*.test.js",
-    "container:build": "pnpm build && docker build -t nanoclaw-st-agent:lesson12 -f container/Dockerfile .",
+    "container:build": "pnpm build && docker build -t nanoclaw-st-agent:lesson14 -f container/Dockerfile .",
     "test:container": "pnpm build && AI_PROVIDER=local node --test dist/test/integration/*.test.js"
   },
   "engines": {
